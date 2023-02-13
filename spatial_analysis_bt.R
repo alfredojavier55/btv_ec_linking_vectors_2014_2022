@@ -20,7 +20,8 @@ names(r) <- c("Temp","min", "max", "Prec")
 plot(r)
 
 #Import my shapefile
-ec3<-rgdal::readOGR(dsn="~/Dropbox/0.USP/10.2020 II sem/FLI/case-control/bayesian/",layer="ec3.1006")
+ec3<-rgdal::readOGR(dsn="~/Dropbox/0.USP/10.2020 II sem/FLI/case-control/bayesian/",layer="nxparroquias")
+# ec3<-rgdal::readOGR(dsn="~/Dropbox/0.USP/10.2020 II sem/FLI/case-control/bayesian/",layer="nxparroquias")
 ec3 <- spTransform(ec3, CRS=CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"))
 trueCentroids <- data.frame(gCentroid(ec3,byid=TRUE))
 
@@ -135,7 +136,7 @@ ggplot()+
 dev.off()
 
 # Temperature max map ----
-tiff(filename = "Fig.3temp_max.tiff", width=13, height=10,
+tiff(filename = "Fig.3temp_maxC.tiff", width=13, height=10,
      units="cm", res=600,compression = "lzw", pointsize = 12)
 
 ggplot()+
@@ -223,10 +224,10 @@ ec3@data$inter <- over(SpatialPolygons(ec3@polygons), sp)
 table(is.na(ec3@data$inter))
 
 # Parishes with bluethonge
-summary(ec3@data$Temp[!is.na(ec3@data$inter)])
+summary(ec@data$Temp[!is.na(ec3@data$inter)])
 
 # Parishes withouth bluethonge
-summary(ec3@data$Temp[is.na(ec3@data$inter)])
+summary(ec@data$Temp[is.na(ec3@data$inter)])
 
 
 # Selecting the risk areas
@@ -235,8 +236,6 @@ ec3@data %>%
   summarize(m=mean(Temp))
   ggplot(aes())
 
-mean(c(23.6, 12.9))
-  
 
 # Subseting maps with 12-26 degrees do not work because it deletes que polygons
 # map2 <- subset(map1, temp >12 & temp <26)
@@ -260,6 +259,7 @@ ec3@data <- ec3@data %>%
 ec <- ec3
 ec <- subset(ec, DPA_DESPRO != "GALAPAGOS")
 ec$id <- rownames(ec@data)
+
 map2 <- fortify(ec)
 
 map2$DPA_PARROQ <- ec@data$DPA_PARROQ[match(map2$id, ec@data$id)]
@@ -271,7 +271,7 @@ map2$temp2 <- ec@data$opt3[match(map2$id, ec@data$id)]
 
 f <- read.csv(file = "manabi.lon.lat.csv")
 
-tiff(filename = "Fig.4map_ideal.tiff", width=13, height=10,
+tiff(filename = "Fig.4map_idealC.tiff", width=13, height=10,
      units="cm", res=600,compression = "lzw", pointsize = 12)
 
 ggplot()+
@@ -281,8 +281,8 @@ ggplot()+
   scale_fill_viridis_c(direction = 1, option =  "D", na.value = "gray90")+
   theme(strip.background = element_blank(), title = NULL)+
   labs(fill=("°C"),
-       x="Longitude",
-       y="Latitude") +
+       x=NULL,
+       y=NULL) +
   xlim(-81.1,-75.1)+
   theme(text = element_text(size = 10),
         panel.spacing=unit(-0.5, 'cm'))+
@@ -302,6 +302,21 @@ ggplot()+
              size=1, shape=21, fill="orange", color="black")
 
 dev.off()
+
+# How many parishes have the ideal conditions for Cullicoides spp?
+table(!is.na(ec@data$opt3))
+561/1040
+#  53% of the territory
+
+# Calculating the area
+ec@data$area <- raster::area(ec) /1000000
+sum(ec@data$area)
+sum(ec@data$area[!is.na(ec@data$opt3)])
+sum(ec@data$area[!is.na(ec@data$opt3)])/sum(ec@data$area)
+73.71
+
+sum(ec@data$area[is.na(ec@data$opt3)]) / sum(ec@data$area)
+26.30
 
 
 ec3@data <- ec3@data %>% 
