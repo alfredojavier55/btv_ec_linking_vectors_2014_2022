@@ -1,0 +1,776 @@
+---
+title: "BTV virus in Ecuador"
+author: "Alfredo Acosta"
+date: "2023-03-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Loading Libraries
+```{r libraries}
+library(terra)   # Replaces raster
+library(sf)      # Replaces rgdal and rgeos
+library(dplyr)
+library(ggplot2)
+library(ggspatial)  # Replaces ggsn
+library(ggmap)
+library(plotly)
+library(sp)
+library(geodata)
+```
+
+# Set Working Directory
+```{r setwd}
+setwd("C:/Users/alfredo.acosta/OneDrive - SVA/Papers/2023/BTV/V4.3.2/")
+```
+
+# Load WorldClim Data
+```{r worldclim}
+r <- geodata::worldclim_global(var = "bio", res = 2.5,
+                               path = "./worldclim_data")
+r <- r[[c(1, 4, 5, 6, 8, 9, 12, 13, 14, 15, 18, 19)]]
+names(r) <- c("Temp", "tseason", "max", "min", "twettest", "tdriest",
+              "Prec", "pwettest", "pdriest", "pseason", "pwarm", "pcold")
+plot(r)
+```
+# Import Shapefile, Transform CRS, exclude galapagos
+```{r shapefile}
+# Read the shapefile
+# Define the relative path to the shapefile
+shapefile_path <- file.path(getwd(), "nxparroquias.shp")
+ec3 <- st_read(shapefile_path)
+
+# Check for invalid geometries
+invalid_geometries <- st_is_valid(ec3, reason = TRUE)
+table(invalid_geometries)
+
+# Fix invalid geometries
+ec3 <- st_make_valid(ec3)
+
+# Re-check for validity
+table(st_is_valid(ec3))
+
+# exclude galapagos
+ec3 <- ec3 %>% filter(DPA_DESPRO != "GALAPAGOS")
+ec3 <- st_transform(ec3, crs = 4326)
+
+```
+# Compute Centroids and Extract Climate Data
+```{r centroids}
+trueCentroids <- st_centroid(ec3)
+values <- terra::extract(r, vect(trueCentroids))
+df <- cbind(st_coordinates(trueCentroids), values)
+ec3 <- cbind(ec3, df)
+```
+
+# Plot Locations
+```{r plot-map}
+ggplot() +
+  geom_sf(data = ec3, fill = "white", color = "black", linewidth = 0.01) +
+  geom_point(data = df, aes(x = X, y = Y), color = "red", size = 0.5) +
+  annotation_scale(location = "bl", width_hint = 0.2) +
+  annotation_north_arrow(location = "lr", which_north = "true",
+                         pad_x = unit(0.75, "in"), pad_y = unit(0.75, "in"),
+                         style = north_arrow_fancy_orienteering) +
+  theme_minimal()
+```
+# Create a Layer of Spatial Points
+```{r spatial-points}
+# Extract bio data to spatial points
+values <- terra::extract(r, vect(trueCentroids))
+df <- cbind(st_coordinates(trueCentroids), values)
+
+# Merge extracted centroids data with shapefile
+ec3 <- cbind(ec3, df[, c(1, 2)])
+```
+
+# Visualizing Ecuador Data
+```{r plot-ecuador}
+plot(r, xlim = c(-82, -75), ylim = c(-6, 2))
+datos <- as.data.frame(ec3)
+```
+
+# Load and Process Outbreak Data
+```{r outbreak-data}
+c <- read.csv("Coordinates.csv")
+d <- read.csv("Coordinates.Wahis.csv")
+e <- read.csv("manabi.lon.lat.csv")
+f <- read.csv("BTV_lat_long.csv")
+f <- filter(f, definitivo == "caso")
+
+# Standardizing column names
+colnames(c)[1] <- "id"
+colnames(e)[2] <- "id"
+colnames(e)[5:8] <- c("X", "Y", "x", "y")
+colnames(f)[c(2, 49, 48)] <- c("id", "x", "y")
+d$id <- as.character(d$id)
+e$id <- as.character(e$id)
+f$id <- as.character(f$id)
+
+# Combine all points
+points <- bind_rows(
+  c, d[, c(1, 5, 6)], e[, c(2, 7, 8)], f[, c(2, 49, 48)]
+)
+```
+
+# Visualizing Outbreak Locations
+```{r plot-outbreaks}
+ggplotly(
+  ggplot() +
+    geom_point(data = points, aes(x = x, y = y, label = rownames(points))) +
+    geom_label()
+)
+```
+
+# Checking and Cleaning Data
+```{r clean-data}
+# Checking for duplicates
+table(c$x %in% f$x)
+
+# Removing NA values from points dataset
+points <- filter(points, !is.na(x), !is.na(y))
+```
+
+# Maps
+```{r}
+# Import the base map of ecuador ---
+# Download map looking at the bordes of colombia and Peru
+# API registration
+register_stadiamaps(key = "76b5ee9f-672a-4475-95ac-c3e2cbfbb72a")
+
+ecu2 <- ggmap::get_stadiamap(bbox = c(left = - 81.4, 
+                                     bottom = -5.1, 
+                                     right = -75, 
+                                     top = 1.6),
+                             zoom = 8,
+                             maptype = "stamen_terrain_background")
+
+# import Quito limits
+uio <- st_read(dsn = "C:/Users/alfredo.acosta/OneDrive - SVA/Papers/2023/BTV/V4.3.2/quito.shp")
+uio <- st_transform(uio, crs = 4326)
+
+# import GYE limits
+gye <- st_read("C:/Users/alfredo.acosta/OneDrive - SVA/Papers/2023/BTV/V4.3.2/guayaquil.shp")
+gye <- st_transform(gye, crs = 4326)
+
+# convert base map to a raster layer
+ecu2_raster <- as.raster(ecu2)
+```
+
+# Locating the outbreaks in the parish
+```{r}
+# Create the spatial points
+sp <- SpatialPoints(points[, c(2, 3)])
+
+# Use the entire map to intersect the points and polygons
+ec3_sf <- st_as_sf(ec3)
+sp_sf <- st_as_sf(sp)
+
+ec3_sf <- st_transform(ec3_sf, crs = 4326)
+sp_sf <- st_set_crs(sp_sf, 4326)
+
+# Count the number of points within each polygon
+ec3_sf$inter2 <- lengths(st_intersects(ec3_sf, sp_sf))
+table(ec3_sf$inter2)
+
+# Replace zeros with NA
+ec3_sf <- ec3_sf %>%
+  mutate(inter2 = ifelse(inter2 == 0, NA, inter2))
+
+# Which are in False 153, True 887, now there is true 879
+table(is.na(ec3_sf$inter2)) 
+
+# Replace zeros with NA
+ec3_sf <- ec3_sf %>%
+  mutate(inter = ifelse(is.na(inter2), 0, 1))
+
+# Which are in False 153, True 887, now there is true 879
+table(ec3_sf$inter)
+```
+
+# Locations of outbreaks and number of outbreaks in areas on the map ----
+```{r}
+ggplot() +
+  geom_sf(data = ec3_sf, aes(fill = inter2)) +
+  geom_point(data = points, aes(x = x, y = y), size = 1, shape = 21, fill = "orange", color = "black") +
+  scale_fill_viridis_c(direction = 1, option = "D", na.value = "gray90") +
+  theme(strip.background = element_blank(), title = NULL)
+```
+# Temperature and precitipation descriptive analysis ----
+```{r}
+# Parishes with bluetongue Max temp 20.62
+summary(ec3_sf$Temp[!is.na(ec3_sf$inter)])
+
+boxplot(ec3_sf$Temp[!is.na(ec3_sf$inter)])
+
+ec3_sf$bt <- ec3_sf$inter
+
+as.data.frame(ec3_sf) %>% 
+  group_by(bt) %>%
+  summarise(mean_temp = mean(Temp),
+            mean_prec = mean(Prec))
+```
+# Filtering optimal temperature ----
+```{r}
+ec3_sf <- ec3_sf %>% 
+  mutate(opt = ifelse(min >12, 1, 0)) %>%
+  mutate(opt2 = ifelse(max <32, 1, 0)) %>%
+  mutate(opt3 = opt+opt2) %>%
+  mutate(opt3 = ifelse(opt3 == 2, Temp, NA))
+
+# Calculating the area
+ec3_sf$area <- st_area(ec3_sf) / 1000000
+sum(ec3_sf$area[!is.na(ec3_sf$opt3)]) / sum(ec3_sf$area, na.rm = TRUE)
+
+
+# Area with ideal temperature
+sum(ec3_sf$area) * 0.73
+
+# How many parishes have the ideal conditions for Cullicoides spp?
+table(!is.na(ec3_sf$opt3))
+561 / 1040
+#  54% of the territory
+```
+
+
+# Simulating rising in temperatures of 2.7 degrees ----
+```{r}
+# Filtering optimal temperature ----
+ec3_sf_rising <- ec3_sf %>%
+  mutate(opt = ifelse((min + 2.7) > 12, 1, 0)) %>%
+  mutate(opt2 = ifelse((max) < 32, 1, 0)) %>%
+  mutate(opt4 = opt + opt2) %>%
+  mutate(opt4 = ifelse(opt4 == 2, (Temp + 2.7), NA))
+
+# Calculating the area
+ec3_sf_rising$area <- st_area(ec3_sf_rising) /1000000
+sum(ec3_sf_rising$area[!is.na(ec3_sf_rising$opt3)])/sum(ec3_sf_rising$area, na.rm = TRUE)
+
+# Area with ideal temperature # 248843.6 [m^2]
+sum(ec3_sf_rising$area)*0.74
+
+sum(ec3_sf_rising$area[!is.na(ec3_sf_rising$opt4)]) -
+  sum(ec3_sf$area[!is.na(ec3_sf$opt3)])
+
+# How many parishes have the ideal conditions for Cullicoides spp?
+table(!is.na(ec3_sf_rising$opt4))
+639 / 1040
+639 - 561
+```
+# Identify the new parishes with ideal conditions in the example of rising temperature 2.7 degrees
+```{r}
+# Identifying the new parishes at rising
+ec3_sf_rising <- ec3_sf_rising %>%
+  mutate(rising = ifelse(is.na(opt3) & !is.na(opt4), opt4, NA))
+table(is.na(ec3_sf_rising$rising))
+# 957-1032 = 75 new
+# New area
+#  72% of the parish
+```
+
+# SM4 new added parishes with the 
+```{r}
+SM4 <- ggplot()+
+  geom_sf(data = ec3_sf_rising, aes(fill = rising), linewidth = 0.00001) +
+  scale_fill_viridis_c(direction = 1, option =  "D", na.value = "white") +
+  theme(strip.background = element_blank(), title = NULL) +
+  labs(fill = "+2.7 °C rise\nNew parishes\nScenario",
+  x = NULL,
+  y = NULL) +
+  xlim(-81.1,- 75.1) +
+  theme(text = element_text(size = 10),
+        panel.spacing = unit(-0.5, "cm")) +
+  theme(legend.key.width = unit(0.15, "cm"),
+        legend.title = element_text(size = 8)) +
+  theme_minimal() +
+  ggsn::north(ec3_sf, symbol = 3) +
+  ggsn::scalebar(ec3_sf, dist = 100, dist_unit = "km", transform = TRUE,
+                 model = "WGS84", st.size = 2, st.dist = 0.05,
+                 anchor = c(x = -76, y = -4.5),
+                 height = 0.02, border.size = 0.09)
+
+tiff(filename = "SM4.tiff", width = 13, height = 10,
+     units = "cm", res = 1200, compression = "lzw", pointsize = 12)
+SM4
+dev.off()
+```
+
+# Reading cattle population and organizing population
+```{r}
+library(readr)# Reading cattle population ----
+pop <- readxl::read_xlsx("AFTOSA_FASE_2023_EC.xlsx", sheet = "AFTOSA_FASE_2023_EC")
+colnames(pop)
+```
+
+# Transforming Data to spatial visualization (Passing the map)
+```{r readr}
+vigi <- pop %>% 
+  group_by(provincia, canton, parroquia) %>%
+  summarize(cantidad = sum(as.numeric(total_aplicado), na.rm = TRUE))
+
+sum(vigi$cantidad, na.rm = TRUE) #4656389
+
+source("C:\\Users\\alfredo.acosta\\OneDrive - SVA\\Papers\\2023\\BTV\\V4.3.2\\passthemap_sizse.update.R")  
+
+# After passing the map the ec3 map is replaced withouth the previous information
+sum(vigi$cantidad, na.rm = TRUE) #4656389
+sum(ec3$cantidad, na.rm = TRUE) #4656389
+
+# transfer number of animals to sf object
+ec3_sf$pop <- ec3$cantidad[match(ec3_sf$DPA_PARROQ, ec3$DPA_PARROQ)]
+sum(ec3_sf$pop, na.rm = TRUE) #105368 animals lacking
+
+# Calculate density
+ec3_sf$popden <- ec3_sf$pop / as.numeric(ec3_sf$area)
+summary(ec3_sf$popden)
+```
+
+# Fig. 2A Mean temperature 
+```{r}
+# Create the plot
+mA <- ggplot() +
+  annotation_raster(ecu2_raster,
+                    xmin = -81.4, xmax = -75, ymin = -5.1, ymax = 1.6) +
+  geom_sf(data = ec3_sf, aes(fill = Temp), linewidth = 0.0000001) +
+  scale_fill_viridis_c(direction = 1, option = "D", na.value = "gray90") +
+  theme_minimal(base_size = 6)+
+  theme(title = NULL,
+        legend.key.width = unit(0.25, 'cm')) +
+  labs(fill = "Average\nTemp.\n°C",
+    x = NULL,
+    y = NULL) +
+  xlim(-81.1, -75.1) +
+  geom_text(aes(x = -76, y = 1), label = "Colombia",
+    size = 3, colour = "black") +
+  geom_text(aes(x = -76, y = -3.5), label = "Peru",
+    size = 3, colour = "black") +
+  geom_sf(data = uio, aes(geometry = geometry), size = 0.1, alpha = 0.2, colour = "red") +
+  geom_sf(data = gye, aes(geometry = geometry), size = 0.1, alpha = 0.2, colour = "red") +
+  annotate("text", label = "Quito", x = -78.75, y = -0.06, size = 1.8, colour = "black") +
+  annotate("text", label = "Guayaquil", x = -80.40, y = -2.0, size = 1.8, colour = "black") +
+  ggsn::scalebar(ec3, dist = 100, dist_unit = "km", transform = TRUE,
+    model = "WGS84", st.size = 2, st.dist = 0.05,
+    anchor = c(x = -76, y = -4.5),
+    height = 0.02, border.size = 0.09)
+
+tiff(filename = "A.tiff", width=13, height=10,
+     units="cm", res=1200,compression = "lzw", pointsize = 12)
+mA
+dev.off()
+```
+# Fig. 2B Map of optimal temperatures 
+```{r}
+mB <- ggplot()+
+  geom_sf(data=ec3_sf, aes(fill=opt3), linewidth = 0.0000001) +
+  scale_fill_viridis_c(direction = 1, option =  "D", na.value = "gray90")+
+  theme_minimal(base_size = 6)+
+  theme(title = NULL,
+    legend.key.width = unit(0.25, 'cm')) +
+  labs(fill =("Vector\nOptimal\nTemp.\n°C"),
+    x=NULL,
+    y=NULL) +
+  xlim(-81.1 , -75.1) +
+  ggsn::north(ec3_sf, symbol = 3) +
+  ggsn::scalebar(ec3_sf, dist = 100, dist_unit = "km",transform = TRUE,
+    model = "WGS84", st.size = 2, st.dist = 0.05,
+    anchor = c(x = -76, y = -4.5),
+    height = 0.02, border.size = 0.09)
+  
+tiff(filename = "B.tiff", width=13, height=10,
+     units="cm", res=1200,compression = "lzw", pointsize = 12)
+mB
+dev.off()
+```
+
+# Fig. 2C Precipitation map ----
+```{r}
+mC <- ggplot()+
+  geom_sf(data=ec3_sf, aes(geometry = geometry),
+    colour = "black", linewidth = 0.0000001) +
+  geom_sf(data=ec3_sf, aes(fill=Prec), linewidth = 0.0000001) +
+  scale_fill_viridis_c(direction = 1, option =  "D", na.value = "gray90")+
+  theme_minimal(base_size = 6)+
+  theme(title = NULL,
+    legend.key.width = unit(0.25, 'cm'))+
+  labs(fill = "Annual\nPrecip.\nmm",
+    x=NULL,
+    y=NULL) +  
+  xlim(-81.1,-75.1)+
+  ggsn::north(ec3_sf, symbol = 3) +
+  ggsn::scalebar(ec3_sf, dist = 100, dist_unit = "km",transform = TRUE,
+    model = "WGS84", st.size = 2, st.dist = 0.05,
+    anchor = c(x = -76, y = -4.5),
+    height = 0.02, border.size = 0.09)
+
+tiff(filename = "C.tiff", width=13, height=10,
+     units="cm", res=1200, compression = "lzw", pointsize = 12)
+mC
+dev.off()
+```
+
+# Fig. 2D pp Graphic population and pop densities ----
+```{r setwd}
+mD <- ggplot()+
+  geom_sf(data=ec3_sf, aes(fill=pop), linewidth = 0.0000001) +
+  scale_fill_viridis_c(direction = -1, option = "D", na.value = "gray90")+
+  theme_minimal(base_size = 6)+
+  theme(title = NULL,
+        legend.key.width = unit(0.25, 'cm'))+
+  labs(fill=("Cattle\nPop\n(Animals)"),
+       x=NULL,
+       y=NULL) +
+  xlim(-81.1,-75.1)+
+  ggsn::north(ec3_sf, symbol = 3) +
+  ggsn::scalebar(ec3_sf, dist = 100, dist_unit = "km",transform = TRUE,
+                 model = "WGS84", st.size = 2, st.dist = 0.05,
+                 anchor = c(x = -76, y = -4.5),
+                 height = 0.02, border.size = 0.09)
+
+tiff(filename = "D.tiff", width=13, height=10,
+     units="cm", res=1200,compression = "lzw", pointsize = 12)
+mD
+dev.off()
+```
+
+# Fig 2 Creating composite map 4 maps in 1 ----
+```{r setwd}
+tiff(filename = "Fig21.tiff",
+  width=18, height=13, units="cm", res=1200,
+  compression = "lzw", pointsize = 12)
+
+ggpubr::ggarrange(mA, mB, mC, mD, ncol = 2, nrow = 2, common.legend = FALSE, 
+  labels = c("A", "B", "C", "D"), 
+  font.label = list(size = 10, color = "black"))
+
+dev.off()
+```
+
+# Density map
+```{r setwd}
+pd <- ggplot() +
+  geom_sf(data = ec3_sf, aes(fill = popden)) +
+  scale_fill_viridis_c(direction = -1, option = "D", na.value = "gray90") +
+  theme_minimal(base_size = 10) +
+  theme(title = NULL, legend.key.width = unit(0.25, 'cm')) +
+  labs(fill = "Cattle\npop density", x = NULL, y = NULL) +
+  xlim(-81.1, -75.1) +
+  ggsn::north(ec3_sf, symbol = 3) +
+  ggsn::scalebar(ec3_sf, dist = 100, dist_unit = "km", 
+  transform = TRUE, model = "WGS84", st.size = 2, 
+  st.dist = 0.05, anchor = c(x = -76, y = -4.5), height = 0.02, border.size = 0.09) +
+  geom_point(data = points, aes(x = x, y = y), size = 0.02, color = "red", alpha = 0.7)
+
+tiff(filename = "density.tiff", width=13, height=10,
+     units="cm", res=1200,compression = "lzw", pointsize = 12)
+pd
+dev.off()
+```
+
+```{r setwd}
+# Analyzing densitites
+summary(ec3_sf$pop)
+# Min.  1st Qu.   Median     Mean  3rd Qu.     Max.     NA's 
+
+summary(ec3_sf$popden)
+# Min.  1st Qu.   Median     Mean  3rd Qu.     Max.     NA's 
+```
+
+
+```{r setwd}
+popdb <- ec3_sf %>% 
+  group_by(DPA_DESPRO) %>% 
+  summarize(p=sum(pop, na.rm = TRUE), 
+                  t=mean(min, na.rm = TRUE))%>% 
+  arrange(desc(p))
+
+popdendb <- ec3@data %>% 
+  group_by(DPA_DESPRO) %>% 
+  summarize(d=mean(popden, na.rm = TRUE)) %>% 
+  arrange(desc(d))
+
+popdb$density <- popdendb$d
+popdb <- popdb[,c(1,2,4,3)]
+
+write.csv(popdb, file = "population-density-province.csv")
+```
+
+# 4 Read no cases of BTV from passive surveillance only
+```{r}
+nbtv <- read.csv("nobtv.csv")
+colnames(nbtv)
+sum(nbtv$value)
+
+length(unique(nbtv$parroquia))
+
+vigi <- nbtv %>%
+  group_by(provincia, canton=cantón, parroquia) %>%
+  summarise(cantidad = sum(value))
+
+sum(vigi$cantidad , na.rm = TRUE)#4634
+### Mapa FINAL
+
+# Using a source function to realocate information provincia cantón y parroquia
+source("C:\\Users\\alfredo.acosta\\OneDrive - SVA\\Papers\\2023\\BTV\\V4.3.2\\passthemap_sizse.update.R")  
+
+ec3_sf$sn <- ec3$cantidad[match(ec3_sf$ID, ec3_sf$ID)]
+sum(ec3_sf$sn, na.rm = TRUE) #4634 #4355
+```
+
+# Read province map
+```{r setwd}
+shapefile_path <- file.path(getwd(), "nxprovincias.shp")
+ec2 <- st_read(shapefile_path)
+
+# Check for invalid geometries
+invalid_geometries <- st_is_valid(ec2, reason = TRUE)
+table(invalid_geometries)
+
+# Fix invalid geometries
+ec2 <- st_make_valid(ec2)
+
+# Re-check for validity
+table(st_is_valid(ec2))
+
+# exclude galapagos
+ec2 <- ec2 %>% filter(DPA_DESPRO != "GALAPAGOS")
+ec2 <- st_transform(ec2, crs = 4326)
+
+```
+# Compute Centroids and Extract Climate Data
+```{r centroids}
+trueCentroids <- st_centroid(ec2)
+ec2$x <- st_coordinates(trueCentroids)[,1]
+ec2$y <- st_coordinates(trueCentroids)[,2]  
+
+# Fig. 1 sn Graphic population and pop densities ----
+sn <- ggplot() +
+  geom_sf(data = ec3_sf, aes(fill = sn), linewidth = 0.00001) +
+  scale_fill_viridis_c(direction = -1, option = "D", na.value = "gray90") +
+  theme_minimal(base_size = 6) +
+  theme(title = NULL,
+        legend.key.width = unit(0.25, 'cm'))+
+  labs(fill=("N°\nFarms\nUnder\nSurv."),
+       x=NULL,
+       y=NULL) +
+  xlim(-81.1,-75.1)+
+  geom_sf(data = ec2, fill = NA, colour = "black", linewidth = 0.1) +
+  ggsn::scalebar(ec3_sf, dist = 100, dist_unit = "km", 
+                 transform = TRUE, model = "WGS84", st.size = 2, 
+                 st.dist = 0.05, anchor = c(x = -76, y = -4.5), height = 0.02, border.size = 0.09) +
+  ggsn::north(ec2, symbol = 3) +
+  geom_point(data = points, aes(x = x, y = y, colour = "BTV +"), size = 0.08, alpha = 0.7) +
+  geom_point(data = c, aes(x = x, y = y, colour = "BTV +"), size = 0.08, alpha = 0.7) +
+  geom_text(data = ec2, aes(x = x, y = y, label = DPA_PROVIN), size = 2)
+
+tiff(filename = "Fig1.tiff", width = 11.5, height = 10,
+     units = "cm", res = 2400, compression = "lzw", pointsize = 12)
+sn
+dev.off()
+
+```
+
+# Logistic model
+```{r setwd}
+library(stats)
+library(epiDisplay)
+library(ResourceSelection)
+library(modEvA)
+library(PerformanceAnalytics)
+
+d <- data.frame(ec3_sf)
+colnames(d)
+str(d)
+
+# 0 Dependent variable Case ----
+d$fcaso <- factor(d$inter)
+
+table(d$fcaso)
+
+# Modifying observation that are outside the location
+d$fcaso[d$DPA_PARROQ == "050555"] <-0
+d$fcaso[d$DPA_PARROQ == "180350"] <-0
+d$fcaso[d$DPA_PARROQ == "060150"] <-0
+d$fcaso[d$DPA_PARROQ == "060651"] <-0
+d$fcaso[d$DPA_PARROQ == "030157"] <-0
+
+# Variable optimal temperature
+d <- d %>% 
+  mutate(optimal = ifelse(is.na(opt3),0,1))
+
+d$ftoptimal <- factor(d$optimal)
+table(d$ftoptimal) #561 ok
+
+table(is.na(d$pop))
+d <- d %>% 
+  mutate(pop2 = ifelse(is.na(pop),0,pop))
+```
+
+# Descriptive analysis
+```{r setwd}
+colnames(d)
+# all variables 
+chart.Correlation(d[,c(11:22)])
+
+# Not correlated
+chart.Correlation(d[,c(13:22,37)])
+chart.Correlation(d[,c(16,19:20,28)])
+
+cor(d[,c(11:22,25)])
+```
+
+```{r,}
+# Model selection
+# Backwards ----
+m0 <- glm(d$fcaso ~ d$max + d$min + d$tdriest + d$pdriest + d$pwettest + d$pseason + d$pwarm +
+            d$pcold + d$tseason + d$Prec + d$twettest + d$Temp, family = binomial(logit)) #AIC 758.5
+summary(m0)
+logistic.display(m0)
+
+m1 <- glm(d$fcaso ~ d$max + d$min + d$tdriest + d$pdriest + d$pwettest + d$pseason + d$pwarm +
+            d$pcold + d$tseason + d$Prec + d$twettest + d$Temp + d$pop2, family = binomial(logit)) #AIC 758.5
+summary(m1)
+logistic.display(m1)
+```
+
+```{r}
+# Univariables models ----
+m1 <- glm(d$fcaso ~ d$pwettest, family = binomial(logit))
+summary(m1)
+cbind(exp(coef(m1)), exp(confint(m1)))
+
+m2 <- glm(d$fcaso ~ d$Prec, family = binomial(logit))
+summary(m2)
+cbind(exp(coef(m2)), exp(confint(m2)))
+
+m3 <- glm(d$fcaso ~ d$pop2, family = binomial(logit))
+summary(m3)
+cbind(exp(coef(m3)), exp(confint(m3)))
+
+m4 <- glm(d$fcaso ~ d$pdriest, family = binomial(logit))
+summary(m4)
+cbind(exp(coef(m4)), exp(confint(m4)))
+
+m5 <- glm(d$fcaso ~ d$max, family = binomial(logit))
+summary(m5)
+cbind(exp(coef(m5)), exp(confint(m5)))
+
+m6 <- glm(d$fcaso ~ d$min, family = binomial(logit))
+summary(m6)
+cbind(exp(coef(m6)), exp(confint(m6)))
+
+m7 <- glm(d$fcaso ~ d$tseason, family = binomial(logit))
+summary(m7)
+cbind(exp(coef(m7)), exp(confint(m7)))
+```
+
+
+# Multivariable ----
+```{r}
+m1 <- glm(d$fcaso ~ d$pwettest + d$Prec + d$max + d$pop2 + d$min + d$pdriest +
+            d$tseason, family = binomial(logit))
+mr <- m1
+
+m2 <- glm(d$fcaso ~ d$pwettest + d$pop2 + d$pdriest + d$max + d$min + d$tseason, family = binomial(logit)) #winner model
+mr <- m2
+
+m3 <- glm(d$fcaso ~ d$pwettest + d$pop2 + d$min + d$tseason , family = binomial(logit))
+mr <- m3
+
+anova(m2,m3, test = "Chisq")
+```
+
+```{r}
+summary(mr)
+logistic.display(mr)
+
+d$m_prob <- predict.glm(mr, type="response")
+d$predicted <- ifelse(d$m_prob < 0.5, 0, 1)
+d$correct <- ifelse(d$predicted == d$fcaso, 1, 0)
+table(d$correct)
+table(d$correct)/length(d$fcaso)
+table(d$correct[d$fcaso == 1]) #13
+table(d$correct[d$fcaso == 0]) #874
+hoslem.test(mr$y, fitted(mr)) #70% good fit
+plotGLM(obs = mr$y, pred = mr$fitted.values) #r2:0.08, d2=0.10
+AUC(model = mr) #0.73
+library(car)
+car::vif(mr)
+car::outlierTest(mr)
+car::influenceIndexPlot(mr, cex=0.01, main=NULL)
+
+# Correlated observations that are important
+#d <- d[-851,]
+#d <- d[-611,]
+```
+
+
+# Predicted probability 
+```{r}
+#Individual probability of having the 
+predicted.data <- data.frame(
+  probabilidade.caso=mr$fitted.values,
+  p.caso=mr$y)
+
+predicted.data <- predicted.data[
+  order(predicted.data$probabilidade.caso, decreasing=FALSE),]
+
+predicted.data$rank <- 1:nrow(predicted.data)
+
+head(predicted.data)
+
+library(ggplot2)
+ggplot(data=predicted.data, aes(x=rank, y=probabilidade.caso)) +
+  geom_point(aes(x=rank, y=probabilidade.caso), stroke=0.05)+ 
+  geom_point(aes(color=probabilidade.caso), alpha=0.9, shape=1, stroke=0.5) +
+  theme(text = element_text(size = 10))+
+  xlab("Predicted") +
+  ylab("Case probability") +
+  labs(color = "Pred.
+Prob")+
+  scale_color_viridis_c()+
+  labs(tag = "b")+
+  theme_linedraw()
+
+boxplot(ec3_sf$Temp[!is.na(ec3_sf$inter)])
+
+# Agregating t the map
+ec3_sf$prob <- d$m_prob[match(ec3_sf$ID, d$ID)]
+```
+
+# plot parish with presence of BTV and points
+# Fig Probability map ----
+```{r}
+pm <- ggplot() +
+  geom_sf(data = ec3_sf, aes(fill = prob), linewidth = 0.00001) +
+  scale_fill_continuous(low = "#fff7ec", high = "#7F0000", na.value ="gray99") +
+  theme_minimal(base_size = 6) +
+  theme(title = NULL,
+        legend.key.width = unit(0.25, 'cm')) +
+  labs(fill=("BTV\nParish\nProb"),
+       x=NULL,
+       y=NULL) +
+  xlim(-81.1,-75.1)+
+  ggsn::scalebar(ec3_sf, dist = 100, dist_unit = "km", 
+                 transform = TRUE, model = "WGS84", st.size = 2, 
+                 st.dist = 0.05, anchor = c(x = -76, y = -4.5), height = 0.02, border.size = 0.09) +
+  ggsn::north(ec3_sf, symbol = 3) + 
+  geom_point(data = points, aes(x = x, y = y, color = "BTV +"), 
+  size = 0.05, alpha = 0.5, show.legend = TRUE) +
+  scale_color_manual(values = c("BTV +" = "blue"), name = "Observed")
+
+tiff(filename = "Fig.3.tiff", width=11.5, height=10,
+       units="cm", res=1200,compression = "lzw", pointsize = 8)
+pm
+dev.off()
+```
+
+# Saving probdata
+```{r}
+colnames(d)
+modelpredictions <- d[, c(1, 8, 6, 2, 19, 40, 20, 14,15, 13, 41  )]
+head(modelpredictions)
+write.csv(modelpredictions, file = "modelpredictions.csv")
+```
