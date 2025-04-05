@@ -1,7 +1,7 @@
 ---
 title: "BTV virus in Ecuador"
 author: "Alfredo Acosta"
-date: "2023-03-08"
+date: "2025-03"
 output: html_document
 ---
 
@@ -24,7 +24,7 @@ library(geodata)
 
 # Set Working Directory
 ```{r setwd}
-setwd("C:/Users/alfredo.acosta/OneDrive - SVA/Papers/2023/BTV/V4.3.2/")
+setwd("C:/Users/alfredo.acosta/Papers/2023/BTV/V4.3.2/")
 ```
 
 # Load WorldClim Data
@@ -149,11 +149,11 @@ ecu2 <- ggmap::get_stadiamap(bbox = c(left = - 81.4,
                              maptype = "stamen_terrain_background")
 
 # import Quito limits
-uio <- st_read(dsn = "C:/Users/alfredo.acosta/OneDrive - SVA/Papers/2023/BTV/V4.3.2/quito.shp")
+uio <- st_read(dsn = "C:/Users/alfredo.acosta/Papers/2023/BTV/V4.3.2/quito.shp")
 uio <- st_transform(uio, crs = 4326)
 
 # import GYE limits
-gye <- st_read("C:/Users/alfredo.acosta/OneDrive - SVA/Papers/2023/BTV/V4.3.2/guayaquil.shp")
+gye <- st_read("C:/Users/alfredo.acosta/Papers/2023/BTV/V4.3.2/guayaquil.shp")
 gye <- st_transform(gye, crs = 4326)
 
 # convert base map to a raster layer
@@ -313,7 +313,7 @@ vigi <- pop %>%
 
 sum(vigi$cantidad, na.rm = TRUE) #4656389
 
-source("C:\\Users\\alfredo.acosta\\OneDrive - SVA\\Papers\\2023\\BTV\\V4.3.2\\passthemap_sizse.update.R")  
+source("C:\\Users\\alfredo.acosta\\Papers\\2023\\BTV\\V4.3.2\\passthemap_sizse.update.R")  
 
 # After passing the map the ec3 map is replaced withouth the previous information
 sum(vigi$cantidad, na.rm = TRUE) #4656389
@@ -513,7 +513,7 @@ sum(vigi$cantidad , na.rm = TRUE)#4634
 ### Mapa FINAL
 
 # Using a source function to realocate information provincia cantón y parroquia
-source("C:\\Users\\alfredo.acosta\\OneDrive - SVA\\Papers\\2023\\BTV\\V4.3.2\\passthemap_sizse.update.R")  
+source("C:\\Users\\alfredo.acosta\\Papers\\2023\\BTV\\V4.3.2\\passthemap_sizse.update.R")  
 
 ec3_sf$sn <- ec3$cantidad[match(ec3_sf$ID, ec3_sf$ID)]
 sum(ec3_sf$sn, na.rm = TRUE) #4634 #4355
